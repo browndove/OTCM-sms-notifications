@@ -249,6 +249,25 @@ export default function HomePage() {
     }
   }, []);
 
+  const loadLatestCampaign = useCallback(async () => {
+    try {
+      const res = await fetch('/api/campaigns');
+      const data = await res.json();
+      const latest = data.campaigns?.[0];
+      if (!latest) return;
+
+      const msgRes = await fetch(`/api/campaigns/${latest.id}/messages`);
+      const msgData = await msgRes.json();
+      if (!msgRes.ok) return;
+
+      setCampaign(latest);
+      setRecipients(msgData.messages || []);
+      setFileName(latest.sourceFile || '');
+    } catch {
+      // silent
+    }
+  }, []);
+
   const handleSyncReports = useCallback(async () => {
     setSyncingReports(true);
     try {
@@ -270,7 +289,8 @@ export default function HomePage() {
 
   useEffect(() => {
     loadReports();
-  }, [loadReports]);
+    loadLatestCampaign();
+  }, [loadReports, loadLatestCampaign]);
 
   useEffect(() => {
     async function loadBalance() {
