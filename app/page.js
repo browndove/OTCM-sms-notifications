@@ -6,6 +6,19 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function formatReportTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+}
+
 function rowSendStatus(row) {
   if (row.phoneIssue) return 'invalid_phone';
   if (!row.name || !row.license) return 'incomplete_row';
@@ -53,6 +66,9 @@ export default function HomePage() {
   const [sendingAll, setSendingAll] = useState(false);
   const [sendAllLabel, setSendAllLabel] = useState('Send to all ready recipients');
   const [refreshing, setRefreshing] = useState(false);
+  const [reports, setReports] = useState([]);
+  const [reportStats, setReportStats] = useState(null);
+  const [syncingReports, setSyncingReports] = useState(false);
 
   const fileInputRef = useRef(null);
   const recipientsRef = useRef(recipients);
@@ -219,6 +235,42 @@ export default function HomePage() {
     }
     setRefreshing(false);
   }, [mergeServerMessages]);
+
+  const loadReports = useCallback(async () => {
+    try {
+      const res = await fetch('/api/reports');
+      const data = await res.json();
+      if (res.ok) {
+        setReports(data.reports || []);
+        setReportStats(data.stats || null);
+      }
+    } catch {
+      // silent
+    }
+  }, []);
+
+  const handleSyncReports = useCallback(async () => {
+    setSyncingReports(true);
+    try {
+      const res = await fetch('/api/reports/sync', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Sync failed');
+      await loadReports();
+      if (campaign) {
+        const msgRes = await fetch(`/api/campaigns/${campaign.id}/messages`);
+        const msgData = await msgRes.json();
+        mergeServerMessages(msgData.messages);
+      }
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSyncingReports(false);
+    }
+  }, [campaign, loadReports, mergeServerMessages]);
+
+  useEffect(() => {
+    loadReports();
+  }, [loadReports]);
 
   useEffect(() => {
     async function loadBalance() {
@@ -436,6 +488,77 @@ export default function HomePage() {
             </div>
           </section>
         )}
+        <section className="panel panel--wide">
+          <div className="panel__header-row">
+            <h2 className="panel__title">Arkesel SMS Reports</h2>
+            <div className="filter-row">
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={syncingReports}
+                onClick={handleSyncReports}
+              >
+                {syncingReports ? 'Syncing…' : 'Sync reports to database'}
+              </button>
+            </div>
+          </div>
+
+          {reportStats && (
+            <div className="summary-grid summary-grid--reports">
+              <div className="summary-card summary-card--good">
+                <div className="summary-card__num">{reportStats.total}</div>
+                <div className="summary-card__label">Stored reports</div>
+              </div>
+              <div className="summary-card summary-card--good">
+                <div className="summary-card__num">{reportStats.delivered}</div>
+                <div className="summary-card__label">Delivered</div>
+              </div>
+              <div className="summary-card summary-card--warn">
+                <div className="summary-card__num">{reportStats.units_used}</div>
+                <div className="summary-card__label">SMS units used</div>
+              </div>
+            </div>
+          )}
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Sent</th>
+                  <th>Type</th>
+                  <th>Sender</th>
+                  <th>Recipient</th>
+                  <th>Units</th>
+                  <th>Status</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reports.length ? reports.map((row) => (
+                  <tr key={row.arkeselId}>
+                    <td className="phone">{formatReportTime(row.sentAt)}</td>
+                    <td>{row.sourceType}</td>
+                    <td>{row.senderId}</td>
+                    <td className="phone">{row.recipient}</td>
+                    <td>{row.units}</td>
+                    <td>
+                      <span className={`badge badge--${row.status === 'DELIVERED' ? 'delivered' : row.status === 'SUBMITTED' ? 'queued' : 'unknown'}`}>
+                        {row.status}
+                      </span>
+                    </td>
+                    <td className="message-preview">{row.messageBody}</td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={7} className="empty-row">
+                      No reports in the database yet. Click &quot;Sync reports to database&quot; to pull delivery data from Arkesel.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
       </main>
 
       <footer className="footnote">

@@ -6,12 +6,13 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "sync-reports": "node scripts/sync-reports.js"
   },
   "dependencies": {
     "axios": "^1.7.7",
-    "lowdb": "^1.0.0",
     "next": "^15.1.0",
+    "pg": "^8.13.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "xlsx": "^0.18.5"

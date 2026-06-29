@@ -4,7 +4,7 @@ import arkesel from '@/lib/arkesel';
 
 export async function POST(_request, { params }) {
   const { messageId } = await params;
-  const msg = db.get('messages').find({ id: messageId }).value();
+  const msg = await db.getMessageById(messageId);
 
   if (!msg) {
     return NextResponse.json({ error: 'Message not found' }, { status: 404 });
@@ -31,26 +31,20 @@ export async function POST(_request, { params }) {
     const isSuccess = result && (result.status === 'success' || result.code === 'ok');
     const arkeselId = result?.data?.id || result?.data?.[0]?.id || null;
 
-    db.get('messages')
-      .find({ id: msg.id })
-      .assign({
-        sendStatus: isSuccess ? 'sent_ok' : 'send_failed',
-        arkeselId,
-        arkeselResponse: result,
-        error: isSuccess ? null : JSON.stringify(result)
-      })
-      .write();
+    await db.updateMessage(msg.id, {
+      sendStatus: isSuccess ? 'sent_ok' : 'send_failed',
+      arkeselId,
+      arkeselResponse: result,
+      error: isSuccess ? null : JSON.stringify(result)
+    });
 
     return NextResponse.json({ ok: isSuccess, result });
   } catch (err) {
     const errPayload = err.response?.data || { message: err.message };
-    db.get('messages')
-      .find({ id: msg.id })
-      .assign({
-        sendStatus: 'send_failed',
-        error: JSON.stringify(errPayload)
-      })
-      .write();
+    await db.updateMessage(msg.id, {
+      sendStatus: 'send_failed',
+      error: JSON.stringify(errPayload)
+    });
     return NextResponse.json({ ok: false, error: errPayload }, { status: 500 });
   }
 }

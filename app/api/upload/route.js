@@ -17,7 +17,7 @@ export async function POST(request) {
 
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    const result = processSpreadsheet(buffer, name);
+    const result = await processSpreadsheet(buffer, name);
 
     return NextResponse.json(result);
   } catch (err) {

@@ -4,7 +4,7 @@ import arkesel from '@/lib/arkesel';
 
 export async function GET(_request, { params }) {
   const { messageId } = await params;
-  const msg = db.get('messages').find({ id: messageId }).value();
+  const msg = await db.getMessageById(messageId);
 
   if (!msg) {
     return NextResponse.json({ error: 'Message not found' }, { status: 404 });
@@ -18,14 +18,11 @@ export async function GET(_request, { params }) {
     const result = await arkesel.getSmsStatus(msg.arkeselId);
     const status = result?.data?.status || result?.status || 'unknown';
 
-    db.get('messages')
-      .find({ id: msg.id })
-      .assign({
-        deliveryStatus: status,
-        deliveryUpdatedAt: new Date().toISOString(),
-        deliveryRaw: result
-      })
-      .write();
+    await db.updateMessage(msg.id, {
+      deliveryStatus: status,
+      deliveryUpdatedAt: new Date().toISOString(),
+      deliveryRaw: result
+    });
 
     return NextResponse.json(result);
   } catch (err) {

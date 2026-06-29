@@ -61,17 +61,18 @@ another channel before this campaign goes out, since SMS can't reach them.
 npm install
 ```
 
-### 2. Configure your Arkesel API key
+### 2. Configure environment
 
-Copy the example env file and fill in your key:
+Copy the example env file and fill in your values:
 
 ```bash
-cp .env.example .env
+cp .env.example .env.local
 ```
 
-Open `.env` and set:
+Open `.env.local` and set:
 
 ```
+DATABASE_URL=your_neon_postgresql_connection_string
 ARKESEL_API_KEY=your_real_key_from_arkesel_dashboard
 SMS_SENDER_ID=PharmCncl
 ```
@@ -80,6 +81,8 @@ Get your API key from the Arkesel dashboard under **Settings → API Keys**.
 Your Sender ID must already be approved in your Arkesel account — Arkesel
 will reject sends from an unapproved sender ID, so check this first if sends
 start failing.
+
+Tables are created automatically on first use (`campaigns` and `messages`).
 
 ### 3. Run it
 
@@ -157,19 +160,15 @@ app/
   globals.css       — styles
   api/              — Next.js API routes (upload, send, webhook, status, balance)
 lib/
-  arkesel.js        — Arkesel API client (send, status lookup, balance)
+  arkesel.js        — Arkesel API client
   phone.js          — Ghana phone number normalization
   template.js       — SMS message builder
-  db.js             — simple JSON file storage (lowdb) — campaigns + messages
-  process-upload.js — spreadsheet parsing logic
-data/db.json        — local data store (gitignored in production use)
+  process-upload.js — spreadsheet parsing
+  db.js             — PostgreSQL storage (campaigns + messages)
 ```
 
-## Known limitation
+## Storage
 
-Data is stored in a flat JSON file (`data/db.json`), which is fine for a
-small team sending occasional campaigns to a few hundred people. If you
-later need multiple people sending campaigns at the same time, or much
-larger lists (thousands+), it'd be worth moving to a real database
-(Postgres/MySQL) — the storage layer is isolated in `server/db.js` so that
-swap wouldn't require touching the rest of the app — the storage layer is isolated in `lib/db.js`.
+Campaign and message data is stored in **PostgreSQL** (Neon). Set `DATABASE_URL`
+in `.env.local`. Tables (`campaigns`, `messages`) are created automatically on
+first use.
