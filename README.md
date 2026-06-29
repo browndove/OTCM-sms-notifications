@@ -26,7 +26,7 @@ The message format matches your example exactly:
 > enquiries, call 0209229100
 
 If you need to change the dates, USSD code, or enquiries number for a future
-campaign, edit the defaults in `server/template.js`.
+campaign, edit the defaults in `lib/template.js`.
 
 ## What I found in your spreadsheet
 
@@ -84,10 +84,10 @@ start failing.
 ### 3. Run it
 
 ```bash
-npm start
+npm run dev
 ```
 
-Then open `http://localhost:3000` (or whatever `PORT` you set).
+Then open `http://localhost:3000` (or whatever `PORT` you set in `.env.local`).
 
 ## Deploying so your team can use it
 
@@ -101,7 +101,7 @@ Typical steps on a platform like Render or Railway:
 1. Push this folder to a GitHub repo (private, since it'll later hold your
    `.env` — just don't commit `.env` itself; it's already gitignored).
 2. Create a new "Web Service" pointing at that repo.
-3. Set the build command to `npm install` and start command to `npm start`.
+3. Set the build command to `npm install && npm run build` and start command to `npm start`.
 4. Add the environment variables from `.env.example` in the platform's
    dashboard (never commit real keys to the repo).
 5. Once deployed, you'll get a URL like `https://your-app.onrender.com`.
@@ -151,17 +151,18 @@ app, or via `GET /api/balance`, before sending to the full list.
 ## Project structure
 
 ```
-server/
-  index.js      — Express app: upload, send, webhook, status routes
-  arkesel.js    — Arkesel API client (send, status lookup, balance)
-  phone.js      — Ghana phone number normalization
-  template.js   — SMS message builder
-  db.js         — simple JSON file storage (lowdb) — campaigns + messages
-public/
-  index.html    — the dashboard page
-  styles.css
-  app.js        — upload, preview, send, and live status logic
-data/db.json    — local data store (gitignored in production use)
+app/
+  page.js           — React dashboard (upload, preview, send, live status)
+  layout.js         — root layout
+  globals.css       — styles
+  api/              — Next.js API routes (upload, send, webhook, status, balance)
+lib/
+  arkesel.js        — Arkesel API client (send, status lookup, balance)
+  phone.js          — Ghana phone number normalization
+  template.js       — SMS message builder
+  db.js             — simple JSON file storage (lowdb) — campaigns + messages
+  process-upload.js — spreadsheet parsing logic
+data/db.json        — local data store (gitignored in production use)
 ```
 
 ## Known limitation
@@ -171,4 +172,4 @@ small team sending occasional campaigns to a few hundred people. If you
 later need multiple people sending campaigns at the same time, or much
 larger lists (thousands+), it'd be worth moving to a real database
 (Postgres/MySQL) — the storage layer is isolated in `server/db.js` so that
-swap wouldn't require touching the rest of the app.
+swap wouldn't require touching the rest of the app — the storage layer is isolated in `lib/db.js`.
