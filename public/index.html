@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OTCMS Training &middot; Bulk SMS Sender</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__brand">
+      <span class="topbar__mark">OTCMS</span>
+      <span class="topbar__title">Training Programme &middot; Bulk SMS Sender</span>
+    </div>
+    <div class="topbar__balance" id="balance">Balance: &mdash;</div>
+  </header>
+
+  <main class="layout">
+
+    <!-- Step 1: Upload -->
+    <section class="panel" id="panel-upload">
+      <h2 class="panel__title"><span class="step">1</span> Upload the licence list</h2>
+      <p class="panel__hint">Excel file with columns: SN, NAMES, LOCATION, CONTACT, LICENSE NUMBERS.</p>
+      <div class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden />
+        <p class="dropzone__text">Drag your file here, or <button class="link-btn" id="browseBtn">browse</button></p>
+        <p class="dropzone__filename" id="fileName"></p>
+      </div>
+      <div class="error" id="uploadError" hidden></div>
+    </section>
+
+    <!-- Step 2: Preview & summary -->
+    <section class="panel" id="panel-summary" hidden>
+      <h2 class="panel__title"><span class="step">2</span> Review before sending</h2>
+
+      <div class="summary-grid" id="summaryGrid"></div>
+
+      <div class="template-preview">
+        <p class="template-preview__label">Sample message</p>
+        <p class="template-preview__bubble" id="sampleMessage">&mdash;</p>
+      </div>
+
+      <div class="settings-row">
+        <label class="field">
+          <span class="field__label">Sender ID</span>
+          <input type="text" id="senderId" value="PharmCncl" maxlength="11" />
+        </label>
+        <label class="field field--checkbox">
+          <input type="checkbox" id="skipIssues" checked />
+          <span>Skip rows with missing/invalid phone or data</span>
+        </label>
+      </div>
+
+      <div class="action-row">
+        <button class="btn btn--primary" id="sendAllBtn">Send to all ready recipients</button>
+        <span class="action-row__note" id="readyCount"></span>
+      </div>
+    </section>
+
+    <!-- Step 3: Live table -->
+    <section class="panel panel--wide" id="panel-table" hidden>
+      <div class="panel__header-row">
+        <h2 class="panel__title"><span class="step">3</span> Send &amp; delivery status</h2>
+        <div class="filter-row">
+          <input type="search" id="searchBox" placeholder="Search name, licence, phone&hellip;" />
+          <select id="filterStatus">
+            <option value="all">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="sent_ok">Sent</option>
+            <option value="send_failed">Send failed</option>
+            <option value="invalid_phone">Invalid phone</option>
+            <option value="incomplete_row">Incomplete row</option>
+          </select>
+          <button class="btn btn--ghost" id="refreshBtn">Refresh statuses</button>
+        </div>
+      </div>
+
+      <div class="progress-bar" id="progressBar">
+        <div class="progress-bar__fill" id="progressFill"></div>
+      </div>
+      <p class="progress-text" id="progressText"></p>
+
+      <div class="table-wrap">
+        <table id="recipientsTable">
+          <thead>
+            <tr>
+              <th>SN</th>
+              <th>Name</th>
+              <th>Location</th>
+              <th>Licence No.</th>
+              <th>Phone</th>
+              <th>Send status</th>
+              <th>Delivery</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="recipientsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footnote">
+    <p>Delivery reports arrive automatically via Arkesel's webhook once it's configured on your dashboard. If you haven't set that up yet, use "Refresh statuses" to poll manually.</p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

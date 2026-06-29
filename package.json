@@ -1,0 +1,19 @@
+{
+  "name": "otcms-sms-app",
+  "version": "1.0.0",
+  "description": "OTCMS Pharmacy Council bulk SMS sender via Arkesel, with delivery tracking",
+  "main": "server/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^2.0.1",
+    "xlsx": "^0.18.5",
+    "lowdb": "^1.0.0",
+    "dotenv": "^16.4.5",
+    "axios": "^1.7.7"
+  }
+}
