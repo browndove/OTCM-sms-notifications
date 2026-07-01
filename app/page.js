@@ -64,7 +64,7 @@ export default function HomePage() {
   const [isDragover, setIsDragover] = useState(false);
   const [skipIssues, setSkipIssues] = useState(true);
   const [sendingAll, setSendingAll] = useState(false);
-  const [sendAllLabel, setSendAllLabel] = useState('Send to all ready recipients');
+  const [sendAllLabel, setSendAllLabel] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [reports, setReports] = useState([]);
   const [reportStats, setReportStats] = useState(null);
@@ -132,9 +132,14 @@ export default function HomePage() {
     () => sendable.filter((r) => r.sendStatus === 'sent_ok' || r.sendStatus === 'send_failed'),
     [sendable]
   );
+  const remainingToSend = useMemo(
+    () => sendable.filter((r) => r.sendStatus !== 'sent_ok'),
+    [sendable]
+  );
   const progressPct = sendable.length ? Math.round((sent.length / sendable.length) * 100) : 0;
   const okCount = sendable.filter((r) => r.sendStatus === 'sent_ok').length;
   const failedCount = sendable.filter((r) => r.sendStatus === 'send_failed').length;
+  const pendingCount = sendable.filter((r) => r.sendStatus === 'pending' || r.sendStatus === 'queued').length;
 
   const filtered = useMemo(() => recipients.filter((row) => {
     const status = rowSendStatus(row);
@@ -161,7 +166,8 @@ export default function HomePage() {
         prev.map((r) => {
           if (r.id !== id) return r;
           const updated = { ...r, sendStatus: data.ok ? 'sent_ok' : 'send_failed' };
-          if (data.result?.data?.id) updated.arkeselId = data.result.data.id;
+          const arkeselId = data.result?.data?.id || data.result?.data?.[0]?.id;
+          if (arkeselId) updated.arkeselId = arkeselId;
           return updated;
         })
       );
@@ -174,6 +180,9 @@ export default function HomePage() {
 
   const handleSendAll = useCallback(async () => {
     if (sendingAll) return;
+    const currentCampaign = campaignRef.current;
+    if (!currentCampaign) return;
+
     const targets = recipientsRef.current.filter((r) => {
       if (r.sendStatus === 'sent_ok') return false;
       if (skipIssues && (r.phoneIssue || !r.message)) return false;
@@ -184,24 +193,48 @@ export default function HomePage() {
       alert('No sendable recipients found.');
       return;
     }
-    if (!confirm(`Send SMS to ${targets.length} recipients now? This will use Arkesel credits.`)) {
+    if (!confirm(`Send SMS to ${targets.length} remaining recipients now? This will use Arkesel credits.`)) {
       return;
     }
 
     setSendingAll(true);
+    let totalDone = 0;
     setSendAllLabel(`Sending… (0 / ${targets.length})`);
 
-    let done = 0;
-    for (const row of targets) {
-      await sendOne(row.id);
-      done += 1;
-      setSendAllLabel(`Sending… (${done} / ${targets.length})`);
-      await sleep(300);
-    }
+    try {
+      let remaining = targets.length;
 
-    setSendAllLabel('Send to all ready recipients');
-    setSendingAll(false);
-  }, [sendingAll, skipIssues, sendOne]);
+      while (remaining > 0) {
+        const res = await fetch(`/api/campaigns/${currentCampaign.id}/send-pending`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 25 })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Send failed');
+
+        totalDone += data.processed;
+        remaining = data.remaining;
+        setSendAllLabel(`Sending… (${totalDone} done, ${remaining} left)`);
+
+        const msgRes = await fetch(`/api/campaigns/${currentCampaign.id}/messages`);
+        const msgData = await msgRes.json();
+        if (msgRes.ok) setRecipients(msgData.messages);
+
+        if (data.processed === 0) break;
+      }
+    } catch (err) {
+      alert(err.message || 'Sending stopped due to an error. You can click again to resume.');
+      if (currentCampaign) {
+        const msgRes = await fetch(`/api/campaigns/${currentCampaign.id}/messages`);
+        const msgData = await msgRes.json();
+        if (msgRes.ok) setRecipients(msgData.messages);
+      }
+    } finally {
+      setSendingAll(false);
+      setSendAllLabel('');
+    }
+  }, [sendingAll, skipIssues]);
 
   const handleRefresh = useCallback(async () => {
     const current = recipientsRef.current;
@@ -408,13 +441,17 @@ export default function HomePage() {
               <button
                 type="button"
                 className="btn btn--primary"
-                disabled={sendingAll}
+                disabled={sendingAll || remainingToSend.length === 0}
                 onClick={handleSendAll}
               >
-                {sendAllLabel}
+                {sendingAll
+                  ? sendAllLabel || 'Sending…'
+                  : remainingToSend.length
+                    ? `Send remaining (${remainingToSend.length})`
+                    : 'All sendable recipients attempted'}
               </button>
               <span className="action-row__note">
-                {ready.length} of {recipients.length} recipients will be messaged
+                {okCount} sent · {pendingCount} waiting · {failedCount} failed
               </span>
             </div>
           </section>
@@ -455,7 +492,7 @@ export default function HomePage() {
             </div>
             <p className="progress-text">
               {sendable.length
-                ? `${sent.length} / ${sendable.length} attempted — ${okCount} sent, ${failedCount} failed`
+                ? `${okCount} sent · ${pendingCount} waiting · ${failedCount} failed — ${sent.length} / ${sendable.length} attempted`
                 : 'No sendable recipients found.'}
             </p>
 
