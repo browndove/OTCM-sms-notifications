@@ -1,6 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+const MESSAGE_PAGE_SIZE = 50;
+const REPORT_PAGE_SIZE = 25;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -13,6 +16,18 @@ function formatReportTime(iso) {
     day: 'numeric',
     month: 'short',
     year: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+}
+
+function formatBatchDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
     hour12: true
@@ -53,39 +68,134 @@ function DeliveryBadge({ row }) {
   return <span className={`badge badge--${cls}`}>{row.deliveryStatus}</span>;
 }
 
+function Pagination({ page, pageSize, total, onPageChange }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (total <= pageSize) return null;
+
+  return (
+    <div className="pagination">
+      <button
+        type="button"
+        className="btn btn--ghost btn--small"
+        disabled={page <= 1}
+        onClick={() => onPageChange(page - 1)}
+      >
+        Previous
+      </button>
+      <span className="pagination__label">
+        Page {page} of {totalPages} · {total} rows
+      </span>
+      <button
+        type="button"
+        className="btn btn--ghost btn--small"
+        disabled={page >= totalPages}
+        onClick={() => onPageChange(page + 1)}
+      >
+        Next
+      </button>
+    </div>
+  );
+}
+
 export default function HomePage() {
+  const [batches, setBatches] = useState([]);
   const [campaign, setCampaign] = useState(null);
+  const [stats, setStats] = useState(null);
   const [recipients, setRecipients] = useState([]);
+  const [messagePage, setMessagePage] = useState(1);
+  const [messageTotal, setMessageTotal] = useState(0);
   const [filterStatus, setFilterStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [balance, setBalance] = useState('Balance: —');
   const [uploadError, setUploadError] = useState('');
   const [fileName, setFileName] = useState('');
   const [isDragover, setIsDragover] = useState(false);
   const [skipIssues, setSkipIssues] = useState(true);
   const [sendingAll, setSendingAll] = useState(false);
+  const [resendingSubmitted, setResendingSubmitted] = useState(false);
   const [sendAllLabel, setSendAllLabel] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [reports, setReports] = useState([]);
   const [reportStats, setReportStats] = useState(null);
+  const [reportPage, setReportPage] = useState(1);
+  const [reportTotal, setReportTotal] = useState(0);
+  const [showReports, setShowReports] = useState(false);
   const [syncingReports, setSyncingReports] = useState(false);
+  const [sampleMessage, setSampleMessage] = useState('');
 
   const fileInputRef = useRef(null);
-  const recipientsRef = useRef(recipients);
   const campaignRef = useRef(campaign);
-
-  useEffect(() => {
-    recipientsRef.current = recipients;
-  }, [recipients]);
+  const filterRef = useRef({ filterStatus, searchTerm, messagePage });
 
   useEffect(() => {
     campaignRef.current = campaign;
   }, [campaign]);
 
-  const mergeServerMessages = useCallback((serverMessages) => {
-    const byId = Object.fromEntries(serverMessages.map((m) => [m.id, m]));
-    setRecipients((prev) => prev.map((r) => ({ ...r, ...byId[r.id] })));
+  useEffect(() => {
+    filterRef.current = { filterStatus, searchTerm, messagePage };
+  }, [filterStatus, searchTerm, messagePage]);
+
+  const loadBatches = useCallback(async () => {
+    try {
+      const res = await fetch('/api/campaigns');
+      const data = await res.json();
+      if (res.ok) setBatches(data.campaigns || []);
+    } catch {
+      // silent
+    }
   }, []);
+
+  const loadMessages = useCallback(async (campaignId, page = 1, status = 'all', search = '') => {
+    const offset = (page - 1) * MESSAGE_PAGE_SIZE;
+    const params = new URLSearchParams({
+      limit: String(MESSAGE_PAGE_SIZE),
+      offset: String(offset),
+      status,
+      search
+    });
+    const res = await fetch(`/api/campaigns/${campaignId}/messages?${params}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load messages');
+
+    setRecipients(data.messages || []);
+    setStats(data.stats || null);
+    setMessageTotal(data.total ?? 0);
+    setMessagePage(page);
+    return data;
+  }, []);
+
+  const loadSampleMessage = useCallback(async (campaignId) => {
+    try {
+      const params = new URLSearchParams({ limit: '1', offset: '0', status: 'pending' });
+      const res = await fetch(`/api/campaigns/${campaignId}/messages?${params}`);
+      const data = await res.json();
+      const msg = data.messages?.[0]?.message;
+      setSampleMessage(msg || 'No pending messages in this batch.');
+    } catch {
+      setSampleMessage('—');
+    }
+  }, []);
+
+  const openBatch = useCallback(async (batch) => {
+    setCampaign(batch);
+    setFileName(batch.sourceFile || '');
+    setFilterStatus('all');
+    setSearchTerm('');
+    setSearchInput('');
+    setMessagePage(1);
+    await loadMessages(batch.id, 1, 'all', '');
+    await loadSampleMessage(batch.id);
+  }, [loadMessages, loadSampleMessage]);
+
+  const refreshCurrentView = useCallback(async () => {
+    const current = campaignRef.current;
+    if (!current) return;
+    const { filterStatus: status, searchTerm: search, messagePage: page } = filterRef.current;
+    await loadMessages(current.id, page, status, search);
+    await loadBatches();
+    await loadSampleMessage(current.id);
+  }, [loadMessages, loadBatches, loadSampleMessage]);
 
   const handleFile = useCallback(async (file) => {
     setFileName(file.name);
@@ -100,11 +210,18 @@ export default function HomePage() {
       if (!res.ok) throw new Error(data.error || 'Upload failed');
 
       setCampaign(data.campaign);
-      setRecipients(data.recipients);
+      setStats(data.stats || null);
+      setFilterStatus('all');
+      setSearchTerm('');
+      setSearchInput('');
+      setMessagePage(1);
+      await loadMessages(data.campaign.id, 1, 'all', '');
+      await loadSampleMessage(data.campaign.id);
+      await loadBatches();
     } catch (err) {
       setUploadError(err.message);
     }
-  }, []);
+  }, [loadMessages, loadSampleMessage, loadBatches]);
 
   const onDrop = useCallback((e) => {
     e.preventDefault();
@@ -113,48 +230,31 @@ export default function HomePage() {
     if (file) handleFile(file);
   }, [handleFile]);
 
-  const ready = useMemo(
-    () => recipients.filter((x) => x.sendStatus === 'pending' && !x.phoneIssue && x.message),
-    [recipients]
-  );
-  const invalidPhone = useMemo(() => recipients.filter((x) => x.phoneIssue), [recipients]);
-  const incomplete = useMemo(
-    () => recipients.filter((x) => !x.phoneIssue && (!x.name || !x.license)),
-    [recipients]
-  );
-  const sample = ready[0] || recipients[0];
+  const onFilterChange = useCallback(async (status) => {
+    setFilterStatus(status);
+    if (!campaign) return;
+    await loadMessages(campaign.id, 1, status, searchTerm);
+  }, [campaign, loadMessages, searchTerm]);
 
-  const sendable = useMemo(
-    () => recipients.filter((r) => !r.phoneIssue && r.message),
-    [recipients]
-  );
-  const sent = useMemo(
-    () => sendable.filter((r) => r.sendStatus === 'sent_ok' || r.sendStatus === 'send_failed'),
-    [sendable]
-  );
-  const remainingToSend = useMemo(
-    () => sendable.filter((r) => r.sendStatus !== 'sent_ok'),
-    [sendable]
-  );
-  const progressPct = sendable.length ? Math.round((sent.length / sendable.length) * 100) : 0;
-  const okCount = sendable.filter((r) => r.sendStatus === 'sent_ok').length;
-  const failedCount = sendable.filter((r) => r.sendStatus === 'send_failed').length;
-  const pendingCount = sendable.filter((r) => r.sendStatus === 'pending' || r.sendStatus === 'queued').length;
+  const onSearchChange = useCallback((value) => {
+    setSearchInput(value);
+  }, []);
 
-  const filtered = useMemo(() => recipients.filter((row) => {
-    const status = rowSendStatus(row);
-    if (filterStatus !== 'all' && status !== filterStatus) return false;
-    if (searchTerm) {
-      const hay = `${row.name} ${row.license} ${row.phoneRaw} ${row.location}`.toLowerCase();
-      if (!hay.includes(searchTerm)) return false;
-    }
-    return true;
-  }), [recipients, filterStatus, searchTerm]);
+  useEffect(() => {
+    if (!campaign) return undefined;
+    const timer = setTimeout(async () => {
+      setSearchTerm(searchInput);
+      await loadMessages(campaign.id, 1, filterStatus, searchInput);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchInput, campaign, filterStatus, loadMessages]);
+
+  const onMessagePageChange = useCallback(async (page) => {
+    if (!campaign) return;
+    await loadMessages(campaign.id, page, filterStatus, searchTerm);
+  }, [campaign, loadMessages, filterStatus, searchTerm]);
 
   const sendOne = useCallback(async (id) => {
-    const row = recipientsRef.current.find((r) => r.id === id);
-    if (!row || row.phoneIssue || !row.message) return;
-
     setRecipients((prev) =>
       prev.map((r) => (r.id === id ? { ...r, sendStatus: 'queued' } : r))
     );
@@ -171,40 +271,36 @@ export default function HomePage() {
           return updated;
         })
       );
+      await refreshCurrentView();
     } catch {
       setRecipients((prev) =>
         prev.map((r) => (r.id === id ? { ...r, sendStatus: 'send_failed' } : r))
       );
     }
-  }, []);
+  }, [refreshCurrentView]);
 
   const handleSendAll = useCallback(async () => {
     if (sendingAll) return;
     const currentCampaign = campaignRef.current;
-    if (!currentCampaign) return;
+    if (!currentCampaign || !stats) return;
 
-    const targets = recipientsRef.current.filter((r) => {
-      if (r.sendStatus === 'sent_ok') return false;
-      if (skipIssues && (r.phoneIssue || !r.message)) return false;
-      return !r.phoneIssue && r.message;
-    });
-
-    if (!targets.length) {
-      alert('No sendable recipients found.');
+    const remaining = stats.remaining || 0;
+    if (!remaining) {
+      alert('No sendable recipients left in this batch.');
       return;
     }
-    if (!confirm(`Send SMS to ${targets.length} remaining recipients now? This will use Arkesel credits.`)) {
+    if (!confirm(`Send SMS to ${remaining} remaining recipients in this batch? This will use Arkesel credits.`)) {
       return;
     }
 
     setSendingAll(true);
-    let totalDone = 0;
-    setSendAllLabel(`Sending… (0 / ${targets.length})`);
+    setSendAllLabel(`Sending… (0 done, ${remaining} left)`);
 
     try {
-      let remaining = targets.length;
+      let left = remaining;
+      let done = 0;
 
-      while (remaining > 0) {
+      while (left > 0) {
         const res = await fetch(`/api/campaigns/${currentCampaign.id}/send-pending`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -213,45 +309,79 @@ export default function HomePage() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Send failed');
 
-        totalDone += data.processed;
-        remaining = data.remaining;
-        setSendAllLabel(`Sending… (${totalDone} done, ${remaining} left)`);
-
-        const msgRes = await fetch(`/api/campaigns/${currentCampaign.id}/messages`);
-        const msgData = await msgRes.json();
-        if (msgRes.ok) setRecipients(msgData.messages);
+        done += data.processed;
+        left = data.remaining;
+        setSendAllLabel(`Sending… (${done} done, ${left} left)`);
+        await refreshCurrentView();
 
         if (data.processed === 0) break;
       }
     } catch (err) {
-      alert(err.message || 'Sending stopped due to an error. You can click again to resume.');
-      if (currentCampaign) {
-        const msgRes = await fetch(`/api/campaigns/${currentCampaign.id}/messages`);
-        const msgData = await msgRes.json();
-        if (msgRes.ok) setRecipients(msgData.messages);
-      }
+      alert(err.message || 'Sending stopped. Click again to resume this batch.');
+      await refreshCurrentView();
     } finally {
       setSendingAll(false);
       setSendAllLabel('');
     }
-  }, [sendingAll, skipIssues]);
+  }, [sendingAll, stats, refreshCurrentView]);
+
+  const handleResendSubmitted = useCallback(async () => {
+    if (resendingSubmitted || sendingAll) return;
+    const currentCampaign = campaignRef.current;
+    if (!currentCampaign || !stats) return;
+
+    const submittedCount = stats.submitted || 0;
+    if (!submittedCount) {
+      alert('No SUBMITTED deliveries in this batch. Sync reports first if you expect some.');
+      return;
+    }
+    if (!confirm(
+      `Resend SMS to ${submittedCount} people with SUBMITTED delivery status in this batch only? This uses extra Arkesel credits.`
+    )) {
+      return;
+    }
+
+    setResendingSubmitted(true);
+    setSendAllLabel(`Resending SUBMITTED… (0 done, ${submittedCount} left)`);
+
+    try {
+      let left = submittedCount;
+      let done = 0;
+
+      while (left > 0) {
+        const res = await fetch(`/api/campaigns/${currentCampaign.id}/resend-submitted`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 25 })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Resend failed');
+
+        done += data.processed;
+        left = data.remaining;
+        setSendAllLabel(`Resending SUBMITTED… (${done} done, ${left} left)`);
+        await refreshCurrentView();
+
+        if (data.processed === 0) break;
+      }
+    } catch (err) {
+      alert(err.message || 'Resend stopped. Click again to continue.');
+      await refreshCurrentView();
+    } finally {
+      setResendingSubmitted(false);
+      setSendAllLabel('');
+    }
+  }, [resendingSubmitted, sendingAll, stats, refreshCurrentView]);
 
   const handleRefresh = useCallback(async () => {
-    const current = recipientsRef.current;
-    const pendingDelivery = current.filter((r) => r.arkeselId && !r.deliveryStatus);
-    const currentCampaign = campaignRef.current;
-
-    if (!pendingDelivery.length) {
-      if (currentCampaign) {
-        const res = await fetch(`/api/campaigns/${currentCampaign.id}/messages`);
-        const data = await res.json();
-        mergeServerMessages(data.messages);
-      }
+    const current = recipients.filter((r) => r.arkeselId && !r.deliveryStatus);
+    if (!current.length) {
+      await refreshCurrentView();
       return;
     }
 
     setRefreshing(true);
-    for (const row of pendingDelivery) {
+    for (const row of current) {
       try {
         const res = await fetch(`/api/status/${row.id}`);
         const data = await res.json();
@@ -262,42 +392,29 @@ export default function HomePage() {
           );
         }
       } catch {
-        // ignore individual failures
+        // ignore
       }
       await sleep(150);
     }
     setRefreshing(false);
-  }, [mergeServerMessages]);
+    await refreshCurrentView();
+  }, [recipients, refreshCurrentView]);
 
-  const loadReports = useCallback(async () => {
-    try {
-      const res = await fetch('/api/reports');
-      const data = await res.json();
-      if (res.ok) {
-        setReports(data.reports || []);
-        setReportStats(data.stats || null);
-      }
-    } catch {
-      // silent
-    }
-  }, []);
+  const loadReports = useCallback(async (page = 1, campaignId = null) => {
+    const offset = (page - 1) * REPORT_PAGE_SIZE;
+    const params = new URLSearchParams({
+      limit: String(REPORT_PAGE_SIZE),
+      offset: String(offset)
+    });
+    if (campaignId) params.set('campaignId', campaignId);
 
-  const loadLatestCampaign = useCallback(async () => {
-    try {
-      const res = await fetch('/api/campaigns');
-      const data = await res.json();
-      const latest = data.campaigns?.[0];
-      if (!latest) return;
-
-      const msgRes = await fetch(`/api/campaigns/${latest.id}/messages`);
-      const msgData = await msgRes.json();
-      if (!msgRes.ok) return;
-
-      setCampaign(latest);
-      setRecipients(msgData.messages || []);
-      setFileName(latest.sourceFile || '');
-    } catch {
-      // silent
+    const res = await fetch(`/api/reports?${params}`);
+    const data = await res.json();
+    if (res.ok) {
+      setReports(data.reports || []);
+      setReportStats(data.stats || null);
+      setReportTotal(data.total ?? 0);
+      setReportPage(page);
     }
   }, []);
 
@@ -307,23 +424,20 @@ export default function HomePage() {
       const res = await fetch('/api/reports/sync', { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Sync failed');
-      await loadReports();
-      if (campaign) {
-        const msgRes = await fetch(`/api/campaigns/${campaign.id}/messages`);
-        const msgData = await msgRes.json();
-        mergeServerMessages(msgData.messages);
+      if (showReports) {
+        await loadReports(reportPage, campaign?.id || null);
       }
+      await refreshCurrentView();
     } catch (err) {
       alert(err.message);
     } finally {
       setSyncingReports(false);
     }
-  }, [campaign, loadReports, mergeServerMessages]);
+  }, [showReports, reportPage, campaign, loadReports, refreshCurrentView]);
 
   useEffect(() => {
-    loadReports();
-    loadLatestCampaign();
-  }, [loadReports, loadLatestCampaign]);
+    loadBatches();
+  }, [loadBatches]);
 
   useEffect(() => {
     async function loadBalance() {
@@ -341,17 +455,20 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!campaign) return undefined;
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/campaigns/${campaign.id}/messages`);
-        const data = await res.json();
-        mergeServerMessages(data.messages);
-      } catch {
-        // silent - next tick will retry
-      }
+    const interval = setInterval(() => {
+      refreshCurrentView();
     }, 20000);
     return () => clearInterval(interval);
-  }, [campaign, mergeServerMessages]);
+  }, [campaign, refreshCurrentView]);
+
+  const remaining = stats?.remaining ?? 0;
+  const sendable = stats?.sendable ?? 0;
+  const okCount = stats?.sent_ok ?? 0;
+  const failedCount = stats?.send_failed ?? 0;
+  const pendingCount = stats?.pending ?? 0;
+  const submittedCount = stats?.submitted ?? 0;
+  const attempted = okCount + failedCount;
+  const progressPct = sendable ? Math.round((attempted / sendable) * 100) : 0;
 
   return (
     <>
@@ -365,7 +482,34 @@ export default function HomePage() {
 
       <main className="layout">
         <section className="panel">
-          <h2 className="panel__title"><span className="step">1</span> Upload the licence list</h2>
+          <h2 className="panel__title">Batches</h2>
+          <p className="panel__hint">Each upload is a separate batch. Open one to send and track — data loads page by page.</p>
+
+          {batches.length ? (
+            <div className="batch-list">
+              {batches.map((batch) => (
+                <button
+                  key={batch.id}
+                  type="button"
+                  className={`batch-card${campaign?.id === batch.id ? ' batch-card--active' : ''}`}
+                  onClick={() => openBatch(batch)}
+                >
+                  <div className="batch-card__title">{batch.sourceFile}</div>
+                  <div className="batch-card__meta">{formatBatchDate(batch.createdAt)}</div>
+                  <div className="batch-card__stats">
+                    {batch.messageCount ?? batch.totalRows} rows · {batch.sentOk ?? 0} sent
+                    {(batch.remaining ?? 0) > 0 ? ` · ${batch.remaining} left` : ''}
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="panel__hint">No batches yet. Upload a spreadsheet below to create one.</p>
+          )}
+        </section>
+
+        <section className="panel">
+          <h2 className="panel__title"><span className="step">+</span> Add new batch</h2>
           <p className="panel__hint">Excel file with columns: SN, NAMES, LOCATION, CONTACT, LICENSE NUMBERS.</p>
           <div
             className={`dropzone${isDragover ? ' is-dragover' : ''}`}
@@ -394,39 +538,37 @@ export default function HomePage() {
           {uploadError && <div className="error">{uploadError}</div>}
         </section>
 
-        {campaign && (
+        {campaign && stats && (
           <section className="panel">
-            <h2 className="panel__title"><span className="step">2</span> Review before sending</h2>
+            <h2 className="panel__title"><span className="step">2</span> Review batch: {campaign.sourceFile}</h2>
+
+            <p className="panel__hint">Sending only affects this batch — not other uploads.</p>
 
             <div className="summary-grid">
               <div className="summary-card summary-card--good">
-                <div className="summary-card__num">{recipients.length}</div>
+                <div className="summary-card__num">{stats.total}</div>
                 <div className="summary-card__label">Total rows</div>
               </div>
               <div className="summary-card summary-card--good">
-                <div className="summary-card__num">{ready.length}</div>
+                <div className="summary-card__num">{stats.ready}</div>
                 <div className="summary-card__label">Ready to send</div>
               </div>
               <div className="summary-card summary-card--warn">
-                <div className="summary-card__num">{invalidPhone.length}</div>
+                <div className="summary-card__num">{stats.invalid_phone}</div>
                 <div className="summary-card__label">Missing / invalid phone</div>
               </div>
               <div className="summary-card summary-card--bad">
-                <div className="summary-card__num">{incomplete.length}</div>
+                <div className="summary-card__num">{stats.incomplete}</div>
                 <div className="summary-card__label">Incomplete rows</div>
               </div>
             </div>
 
             <div className="template-preview">
               <p className="template-preview__label">Sample message</p>
-              <p className="template-preview__bubble">{sample?.message || 'No valid rows to preview.'}</p>
+              <p className="template-preview__bubble">{sampleMessage || '—'}</p>
             </div>
 
             <div className="settings-row">
-              <label className="field">
-                <span className="field__label">Sender ID</span>
-                <input type="text" defaultValue="PharmCncl" maxLength={11} readOnly title="Set SMS_SENDER_ID in .env.local" />
-              </label>
               <label className="field field--checkbox">
                 <input
                   type="checkbox"
@@ -437,42 +579,56 @@ export default function HomePage() {
               </label>
             </div>
 
-            <div className="action-row">
+            <div className="action-row action-row--wrap">
               <button
                 type="button"
                 className="btn btn--primary"
-                disabled={sendingAll || remainingToSend.length === 0}
+                disabled={sendingAll || resendingSubmitted || remaining === 0}
                 onClick={handleSendAll}
               >
                 {sendingAll
                   ? sendAllLabel || 'Sending…'
-                  : remainingToSend.length
-                    ? `Send remaining (${remainingToSend.length})`
-                    : 'All sendable recipients attempted'}
+                  : remaining > 0
+                    ? `Send remaining in this batch (${remaining})`
+                    : 'Batch fully attempted'}
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                disabled={sendingAll || resendingSubmitted || submittedCount === 0}
+                onClick={handleResendSubmitted}
+                title="Resend to people whose delivery status is still SUBMITTED (not confirmed delivered)"
+              >
+                {resendingSubmitted
+                  ? sendAllLabel || 'Resending…'
+                  : submittedCount > 0
+                    ? `Resend SUBMITTED (${submittedCount})`
+                    : 'No SUBMITTED to resend'}
               </button>
               <span className="action-row__note">
-                {okCount} sent · {pendingCount} waiting · {failedCount} failed
+                {okCount} sent · {pendingCount} waiting · {failedCount} failed · {submittedCount} submitted
               </span>
             </div>
           </section>
         )}
 
-        {campaign && (
+        {campaign && stats && (
           <section className="panel panel--wide">
             <div className="panel__header-row">
-              <h2 className="panel__title"><span className="step">3</span> Send &amp; delivery status</h2>
+              <h2 className="panel__title"><span className="step">3</span> Recipients (this batch)</h2>
               <div className="filter-row">
                 <input
                   type="search"
                   placeholder="Search name, licence, phone…"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value.trim().toLowerCase())}
+                  value={searchInput}
+                  onChange={(e) => onSearchChange(e.target.value.trim().toLowerCase())}
                 />
-                <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+                <select value={filterStatus} onChange={(e) => onFilterChange(e.target.value)}>
                   <option value="all">All statuses</option>
                   <option value="pending">Pending</option>
                   <option value="sent_ok">Sent</option>
                   <option value="send_failed">Send failed</option>
+                  <option value="submitted">Delivery: SUBMITTED</option>
                   <option value="invalid_phone">Invalid phone</option>
                   <option value="incomplete_row">Incomplete row</option>
                 </select>
@@ -491,10 +647,17 @@ export default function HomePage() {
               <div className="progress-bar__fill" style={{ width: `${progressPct}%` }} />
             </div>
             <p className="progress-text">
-              {sendable.length
-                ? `${okCount} sent · ${pendingCount} waiting · ${failedCount} failed — ${sent.length} / ${sendable.length} attempted`
-                : 'No sendable recipients found.'}
+              {sendable
+                ? `${okCount} sent · ${pendingCount} waiting · ${failedCount} failed — ${attempted} / ${sendable} attempted in batch`
+                : 'No sendable recipients in this batch.'}
             </p>
+
+            <Pagination
+              page={messagePage}
+              pageSize={MESSAGE_PAGE_SIZE}
+              total={messageTotal}
+              onPageChange={onMessagePageChange}
+            />
 
             <div className="table-wrap">
               <table>
@@ -511,7 +674,7 @@ export default function HomePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((row) => {
+                  {recipients.length ? recipients.map((row) => {
                     const phoneDisplay = row.phoneFormatted || row.phoneRaw || '—';
                     const status = rowSendStatus(row);
                     const canRetry = row.sendStatus === 'send_failed' || row.sendStatus === 'pending';
@@ -539,89 +702,126 @@ export default function HomePage() {
                         </td>
                       </tr>
                     );
-                  })}
+                  }) : (
+                    <tr>
+                      <td colSpan={8} className="empty-row">No rows match this filter.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
+
+            <Pagination
+              page={messagePage}
+              pageSize={MESSAGE_PAGE_SIZE}
+              total={messageTotal}
+              onPageChange={onMessagePageChange}
+            />
           </section>
         )}
+
         <section className="panel panel--wide">
           <div className="panel__header-row">
-            <h2 className="panel__title">Arkesel SMS Reports</h2>
+            <h2 className="panel__title">Delivery reports</h2>
             <div className="filter-row">
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => {
+                  const next = !showReports;
+                  setShowReports(next);
+                  if (next) loadReports(1, campaign?.id || null);
+                }}
+              >
+                {showReports ? 'Hide reports' : 'View reports'}
+              </button>
               <button
                 type="button"
                 className="btn btn--primary"
                 disabled={syncingReports}
                 onClick={handleSyncReports}
               >
-                {syncingReports ? 'Syncing…' : 'Sync reports to database'}
+                {syncingReports ? 'Syncing…' : 'Sync from Arkesel'}
               </button>
             </div>
           </div>
 
-          {reportStats && (
-            <div className="summary-grid summary-grid--reports">
-              <div className="summary-card summary-card--good">
-                <div className="summary-card__num">{reportStats.total}</div>
-                <div className="summary-card__label">Stored reports</div>
-              </div>
-              <div className="summary-card summary-card--good">
-                <div className="summary-card__num">{reportStats.delivered}</div>
-                <div className="summary-card__label">Delivered</div>
-              </div>
-              <div className="summary-card summary-card--warn">
-                <div className="summary-card__num">{reportStats.units_used}</div>
-                <div className="summary-card__label">SMS units used</div>
-              </div>
-            </div>
-          )}
+          {showReports && (
+            <>
+              {reportStats && (
+                <div className="summary-grid summary-grid--reports">
+                  <div className="summary-card summary-card--good">
+                    <div className="summary-card__num">{reportStats.total}</div>
+                    <div className="summary-card__label">Stored reports</div>
+                  </div>
+                  <div className="summary-card summary-card--good">
+                    <div className="summary-card__num">{reportStats.delivered}</div>
+                    <div className="summary-card__label">Delivered</div>
+                  </div>
+                  <div className="summary-card summary-card--warn">
+                    <div className="summary-card__num">{reportStats.units_used}</div>
+                    <div className="summary-card__label">SMS units used</div>
+                  </div>
+                </div>
+              )}
 
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Sent</th>
-                  <th>Type</th>
-                  <th>Sender</th>
-                  <th>Recipient</th>
-                  <th>Units</th>
-                  <th>Status</th>
-                  <th>Message</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reports.length ? reports.map((row) => (
-                  <tr key={row.arkeselId}>
-                    <td className="phone">{formatReportTime(row.sentAt)}</td>
-                    <td>{row.sourceType}</td>
-                    <td>{row.senderId}</td>
-                    <td className="phone">{row.recipient}</td>
-                    <td>{row.units}</td>
-                    <td>
-                      <span className={`badge badge--${row.status === 'DELIVERED' ? 'delivered' : row.status === 'SUBMITTED' ? 'queued' : 'unknown'}`}>
-                        {row.status}
-                      </span>
-                    </td>
-                    <td className="message-preview">{row.messageBody}</td>
-                  </tr>
-                )) : (
-                  <tr>
-                    <td colSpan={7} className="empty-row">
-                      No reports in the database yet. Click &quot;Sync reports to database&quot; to pull delivery data from Arkesel.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+              {campaign && (
+                <p className="panel__hint">
+                  Showing reports for the open batch. Sync pulls delivery data for all sent messages.
+                </p>
+              )}
+
+              <Pagination
+                page={reportPage}
+                pageSize={REPORT_PAGE_SIZE}
+                total={reportTotal}
+                onPageChange={(page) => loadReports(page, campaign?.id || null)}
+              />
+
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Sent</th>
+                      <th>Sender</th>
+                      <th>Recipient</th>
+                      <th>Units</th>
+                      <th>Status</th>
+                      <th>Message</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reports.length ? reports.map((row) => (
+                      <tr key={row.arkeselId}>
+                        <td className="phone">{formatReportTime(row.sentAt)}</td>
+                        <td>{row.senderId}</td>
+                        <td className="phone">{row.recipient}</td>
+                        <td>{row.units}</td>
+                        <td>
+                          <span className={`badge badge--${row.status === 'DELIVERED' ? 'delivered' : row.status === 'SUBMITTED' ? 'queued' : 'unknown'}`}>
+                            {row.status}
+                          </span>
+                        </td>
+                        <td className="message-preview">{row.messageBody}</td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td colSpan={6} className="empty-row">
+                          No reports yet for this view. Click &quot;Sync from Arkesel&quot; after sending.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </section>
       </main>
 
       <footer className="footnote">
         <p>
-          Delivery reports arrive automatically via Arkesel&apos;s webhook once it&apos;s configured on your dashboard.
-          If you haven&apos;t set that up yet, use &quot;Refresh statuses&quot; to poll manually.
+          Uploads create separate batches. Open a batch to work on it — only 50 recipients load per page.
         </p>
       </footer>
     </>
