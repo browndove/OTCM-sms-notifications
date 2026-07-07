@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * One-off script: import data/db.json into Postgres, then sync Arkesel SMS reports.
- * Usage: node scripts/sync-reports.js
+ * Usage: node scripts/sync-reports.js [campaignId]
  * (loads DATABASE_URL and ARKESEL_API_KEY from .env.local via Next-style env)
  */
 const fs = require('fs');
@@ -33,11 +33,16 @@ const { importLocalJson } = require('../lib/import-local-data');
   const importResult = await importLocalJson();
   console.log(importResult);
 
-  console.log('Syncing Arkesel reports…');
-  const syncResult = await syncReportsFromArkesel(db, arkesel);
+  const campaignId = process.argv[2] || null;
+  if (campaignId) {
+    console.log(`Syncing Arkesel reports for campaign ${campaignId}…`);
+  } else {
+    console.log('Syncing Arkesel reports for all campaigns…');
+  }
+  const syncResult = await syncReportsFromArkesel(db, arkesel, { campaignId });
   console.log(syncResult);
 
-  const stats = await db.getSmsReportStats();
+  const stats = await db.getSmsReportStats(campaignId);
   console.log('Report stats:', stats);
   process.exit(0);
 })().catch((err) => {

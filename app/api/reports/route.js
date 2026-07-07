@@ -10,7 +10,7 @@ export async function GET(request) {
 
     const [reports, stats, total] = await Promise.all([
       db.getSmsReports({ limit, offset, campaignId }),
-      db.getSmsReportStats(),
+      db.getSmsReportStats(campaignId),
       db.countSmsReports(campaignId)
     ]);
 

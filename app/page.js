@@ -177,6 +177,24 @@ export default function HomePage() {
     }
   }, []);
 
+  const loadReports = useCallback(async (page = 1, campaignId = null) => {
+    const offset = (page - 1) * REPORT_PAGE_SIZE;
+    const params = new URLSearchParams({
+      limit: String(REPORT_PAGE_SIZE),
+      offset: String(offset)
+    });
+    if (campaignId) params.set('campaignId', campaignId);
+
+    const res = await fetch(`/api/reports?${params}`);
+    const data = await res.json();
+    if (res.ok) {
+      setReports(data.reports || []);
+      setReportStats(data.stats || null);
+      setReportTotal(data.total ?? 0);
+      setReportPage(page);
+    }
+  }, []);
+
   const openBatch = useCallback(async (batch) => {
     setCampaign(batch);
     setFileName(batch.sourceFile || '');
@@ -184,9 +202,13 @@ export default function HomePage() {
     setSearchTerm('');
     setSearchInput('');
     setMessagePage(1);
+    setReportPage(1);
     await loadMessages(batch.id, 1, 'all', '');
     await loadSampleMessage(batch.id);
-  }, [loadMessages, loadSampleMessage]);
+    if (showReports) {
+      await loadReports(1, batch.id);
+    }
+  }, [loadMessages, loadSampleMessage, showReports, loadReports]);
 
   const refreshCurrentView = useCallback(async () => {
     const current = campaignRef.current;
@@ -400,32 +422,24 @@ export default function HomePage() {
     await refreshCurrentView();
   }, [recipients, refreshCurrentView]);
 
-  const loadReports = useCallback(async (page = 1, campaignId = null) => {
-    const offset = (page - 1) * REPORT_PAGE_SIZE;
-    const params = new URLSearchParams({
-      limit: String(REPORT_PAGE_SIZE),
-      offset: String(offset)
-    });
-    if (campaignId) params.set('campaignId', campaignId);
-
-    const res = await fetch(`/api/reports?${params}`);
-    const data = await res.json();
-    if (res.ok) {
-      setReports(data.reports || []);
-      setReportStats(data.stats || null);
-      setReportTotal(data.total ?? 0);
-      setReportPage(page);
-    }
-  }, []);
-
   const handleSyncReports = useCallback(async () => {
+    const currentCampaign = campaignRef.current;
+    if (!currentCampaign) {
+      alert('Open a batch first — sync only pulls delivery reports for that batch.');
+      return;
+    }
+
     setSyncingReports(true);
     try {
-      const res = await fetch('/api/reports/sync', { method: 'POST' });
+      const res = await fetch('/api/reports/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId: currentCampaign.id })
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Sync failed');
       if (showReports) {
-        await loadReports(reportPage, campaign?.id || null);
+        await loadReports(reportPage, currentCampaign.id);
       }
       await refreshCurrentView();
     } catch (err) {
@@ -433,7 +447,7 @@ export default function HomePage() {
     } finally {
       setSyncingReports(false);
     }
-  }, [showReports, reportPage, campaign, loadReports, refreshCurrentView]);
+  }, [showReports, reportPage, loadReports, refreshCurrentView]);
 
   useEffect(() => {
     loadBatches();
@@ -724,30 +738,40 @@ export default function HomePage() {
           <div className="panel__header-row">
             <h2 className="panel__title">Delivery reports</h2>
             <div className="filter-row">
-              <button
-                type="button"
-                className="btn btn--ghost"
-                onClick={() => {
-                  const next = !showReports;
-                  setShowReports(next);
-                  if (next) loadReports(1, campaign?.id || null);
-                }}
-              >
-                {showReports ? 'Hide reports' : 'View reports'}
-              </button>
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={syncingReports}
-                onClick={handleSyncReports}
-              >
-                {syncingReports ? 'Syncing…' : 'Sync from Arkesel'}
-              </button>
+              {campaign ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn--ghost"
+                    onClick={() => {
+                      const next = !showReports;
+                      setShowReports(next);
+                      if (next) loadReports(1, campaign.id);
+                    }}
+                  >
+                    {showReports ? 'Hide reports' : 'View reports'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    disabled={syncingReports}
+                    onClick={handleSyncReports}
+                  >
+                    {syncingReports ? 'Syncing…' : 'Sync this batch from Arkesel'}
+                  </button>
+                </>
+              ) : (
+                <span className="panel__hint">Open a batch to view and sync its delivery reports.</span>
+              )}
             </div>
           </div>
 
-          {showReports && (
+          {campaign && showReports && (
             <>
+              <p className="panel__hint">
+                Scoped to <strong>{campaign.sourceFile}</strong> — only messages sent in this batch are synced and shown.
+              </p>
+
               {reportStats && (
                 <div className="summary-grid summary-grid--reports">
                   <div className="summary-card summary-card--good">
@@ -765,17 +789,11 @@ export default function HomePage() {
                 </div>
               )}
 
-              {campaign && (
-                <p className="panel__hint">
-                  Showing reports for the open batch. Sync pulls delivery data for all sent messages.
-                </p>
-              )}
-
               <Pagination
                 page={reportPage}
                 pageSize={REPORT_PAGE_SIZE}
                 total={reportTotal}
-                onPageChange={(page) => loadReports(page, campaign?.id || null)}
+                onPageChange={(page) => loadReports(page, campaign.id)}
               />
 
               <div className="table-wrap">
@@ -807,7 +825,7 @@ export default function HomePage() {
                     )) : (
                       <tr>
                         <td colSpan={6} className="empty-row">
-                          No reports yet for this view. Click &quot;Sync from Arkesel&quot; after sending.
+                          No reports yet for this batch. Send messages, then click &quot;Sync this batch from Arkesel&quot;.
                         </td>
                       </tr>
                     )}
